@@ -142,9 +142,18 @@ int main()
                     0.4, 1.
                 );
 
-                /* Scale the sphere's intrinsic color (which, remember, is pure white) by the
-                brightness factor, which was determined by Lambertian reflectance. */
-                image[row][col] = Vec3D{1, 1, 1} * brightness_factor;
+                /* Now use a spatial texture to color the surface of the sphere. Specifically,
+                 we will set the color of the sphere at the hit point (x, y, z) to be the RGB
+                color with all channels set to (sin(16x)sin(16y)sin(16z) + 1) / 2.  */
+                auto color_from_spatial_texture = Vec3D{1, 1, 1} * (
+                    std::sin(16 * hit_point->x)
+                  * std::sin(16 * hit_point->y)
+                  * std::sin(16 * hit_point->z) + 1
+                ) / 2.;
+
+                /* Scale the color at this point (which is `color_from_spatial_texture`) by the
+                brightness factor (which was determined by Lambertian reflectance). */
+                image[row][col] = color_from_spatial_texture * brightness_factor;
             } else {
                 /* This camera ray did not hit the sphere, so this pixel's color will be equal
                 to the background color */
