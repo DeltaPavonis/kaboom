@@ -11,6 +11,9 @@ constexpr size_t IMAGE_ROWS = 1000, IMAGE_COLS = 1000;
 /* Radius of the single sphere, which is centered at the origin */
 constexpr double SPHERE_RADIUS = 1.5;
 
+/* Position of the single point light */
+constexpr Point3D POINT_LIGHT_POS{10, 10, 10};
+
 /* Properties of the camera */
 constexpr Point3D CAMERA_CENTER{0, 0, 3};
 constexpr double VERTICAL_FOV_RADIANS = std::numbers::pi / 3;
@@ -30,8 +33,10 @@ std::optional<Point3D> closest_sphere_hit_point(const Point3D &ray_origin, const
     until we first hit or go inside the sphere; when that happens, we just return the current
     point, and that will be the closest hit point to the sphere.
     
-    Here, we test distances starting from 0 (obviously) in increments of 0.01. */
-    for (double distance_along_ray = 0; distance_along_ray < 100; distance_along_ray += 0.01) {
+    Here, we test distances starting from 0 (obviously) in increments of 0.01. In our scene,
+    every closest hit point has distance less than 5 from the camera center, so we only need
+    to test distances less than 5. */
+    for (double distance_along_ray = 0; distance_along_ray < 5; distance_along_ray += 0.01) {
 
         /* Check if the point at a distance of `distance_along_ray` along the given ray is
         on or inside the sphere. To do this, observe that a point (x, y, z) is on/inside the
@@ -109,7 +114,37 @@ int main()
             be the default background color (a blueish shade). */
             if (auto hit_point = closest_sphere_hit_point(CAMERA_CENTER, ray_dir); hit_point) {
                 /* This camera ray hit the sphere */
-                image[row][col] = Vec3D{1, 1, 1};  /* The sphere's color is pure white */
+
+                /* Implement Lambertian (diffuse) reflectance for the sphere; the brightness
+                at a certain point p on the sphere is proportional to the cosine of the angle
+                between the surface normal at that hit point p, and the vector from p towards
+                the point light. Note that this is different from Lambert's Cosine Law (I think),
+                which uses the cosine of the angle between the surface normal and the vector
+                from the observer towards the hit point. According to GPT-4, the latter is used
+                for physically modeling surface emission and scattering of light, while the former
+                models reflection of light; these are different interpretations of Lambert's
+                Cosine Law, and the former is used for computer graphics. TODO: Fact-check this.
+                
+                To compute the cosine of the angle between the surface normal and the direction
+                towards the point light, we observe that for two vectors a, b, we have
+                dot(a, b) = |a||b|cos(theta). Thus, if |a| = |b| = 1, then dot(a, b) = cos(theta),
+                which is what we want to compute. As a result, here, cos(theta) is equal to the
+                dot product of the UNIT surface normal at the hit point, and the UNIT direction
+                from the hit point towards the light. */
+                auto unit_surface_normal = (*hit_point - Point3D{0, 0, 0}).unit_vector();
+                auto unit_dir_to_light = (POINT_LIGHT_POS - *hit_point).unit_vector();
+                auto brightness_factor = std::clamp(
+                    /* Calculate the cosine of the angle between the surface normal at the hit
+                    point, and the direction from the hit point to the light */
+                    dot(unit_surface_normal, unit_dir_to_light),
+                    /* Then clamp that value, because it may be negative or exceed 1. The
+                    tutorial chooses the set a lower bound of 0.4, so I will do that as well. */
+                    0.4, 1.
+                );
+
+                /* Scale the sphere's intrinsic color (which, remember, is pure white) by the
+                brightness factor, which was determined by Lambertian reflectance. */
+                image[row][col] = Vec3D{1, 1, 1} * brightness_factor;
             } else {
                 /* This camera ray did not hit the sphere, so this pixel's color will be equal
                 to the background color */
