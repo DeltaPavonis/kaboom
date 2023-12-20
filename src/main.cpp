@@ -6,7 +6,7 @@
 #include "vec3d.h"
 
 /* Dimensions of the rendered image */
-constexpr size_t IMAGE_ROWS = 1000, IMAGE_COLS = 1000;
+constexpr size_t IMAGE_ROWS = 750, IMAGE_COLS = 1000;
 
 /* Radius of the single sphere, which is centered at the origin */
 constexpr double SPHERE_RADIUS = 1.5;
@@ -18,6 +18,31 @@ constexpr Point3D POINT_LIGHT_POS{10, 10, 10};
 constexpr Point3D CAMERA_CENTER{0, 0, 3};
 constexpr double VERTICAL_FOV_RADIANS = std::numbers::pi / 3;
 constexpr Vec3D BACKGROUND_COLOR{0.2, 0.7, 0.8};
+
+/* Returns the signed distance from the point `p` to the surface of the sphere.
+By "signed distance", we mean the value whose magnitude equals the shortest distance
+from `p` to the sphere's surface, and whose sign specifies whether or not `p` is
+inside the sphere. Specifically, if the signed distance is negative, positive, or
+zero, then `p` lies inside, outside, and on the surface of the sphere, respectively.
+Thus, the point `p` lies on or inside the sphere if and only if the signed distance
+from `p` to the sphere is nonpositive. */
+auto signed_distance_from_sphere(const Point3D &p) {
+    /* The shortest distance from a point `p` to a sphere with center `C` and radius `r`
+    is simply |dist(C, p) - r| (because it just equals the difference between the distance
+    from the center to `p`, and the distance from the center to the sphere's surface (which
+    is just the radius `r`)). As a result, the SIGNED distance is just dist(C, p) - r, because
+    its magnitude is |dist(C, p) - r|, which we just established was the shortest distance
+    from `p` to the sphere's surface, and because the sign of dist(C, p) - r tells us when
+    `p` is inside, outside, or on the sphere (dist(C, p) - r is negative iff dist(C, p) < r
+    iff p is inside the sphere, dist(C, p) - r is positive iff dist(C, p) > r iff p is outside
+    the sphere, and dist(C, p) - r is zero iff dist(C, p) = r iff p is on the sphere's surface,
+    as desired).
+
+    Finally, because our sphere is centered at the origin, dist(C, p) is just equal to the
+    magnitude of p. Thus, the signed distance from `p` to the sphere is given by
+    p.mag() - SPHERE_RADIUS, which is what we will return. */
+    return p.mag() - SPHERE_RADIUS;
+}
 
 /* Returns the closest hit point of the ray with origin `ray_origin` and direction `ray_dir`
 with the sphere we are rendering, which is centered at the origin, and has radius given by
@@ -39,14 +64,14 @@ std::optional<Point3D> closest_sphere_hit_point(const Point3D &ray_origin, const
     for (double distance_along_ray = 0; distance_along_ray < 5; distance_along_ray += 0.01) {
 
         /* Check if the point at a distance of `distance_along_ray` along the given ray is
-        on or inside the sphere. To do this, observe that a point (x, y, z) is on/inside the
-        sphere if and only if x^2 + y^2 + z^2 <= SPHERE_RADIUS^2, because the sphere is
-        centered at the origin. If the current point (which is given by taking ray_origin,
-        then adding distance_along_ray times the UNIT ray direction) does hit the sphere,
-        then it is the closest hit point of this ray with the sphere, so we just
-        return it immediately. */
+        on or inside the sphere. If it does hit the sphere, then it is the closest hit point
+        of this ray with the sphere, so we return it immediately. */
         auto curr_point = ray_origin + distance_along_ray * ray_unit_dir;
-        if (curr_point.mag_squared() <= SPHERE_RADIUS * SPHERE_RADIUS) {
+        
+        /* `curr_point` is on or inside the sphere iff its signed distance to the sphere
+        is nonpositive, by the definition of signed distance (see the comments for
+        `signed_distance_from_sphere()`). */
+        if (signed_distance_from_sphere(curr_point) <= 0) {
             return curr_point;
         }
     }
