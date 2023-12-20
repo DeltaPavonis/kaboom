@@ -10,6 +10,9 @@ constexpr size_t IMAGE_ROWS = 750, IMAGE_COLS = 1000;
 
 /* Radius of the single sphere, which is centered at the origin */
 constexpr double SPHERE_RADIUS = 1.5;
+/* The amplitude of the peaks on the surface of the sphere after performing displacement
+mapping */
+constexpr double SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE = 0.2;
 
 /* Position of the single point light */
 constexpr Point3D POINT_LIGHT_POS{10, 10, 10};
@@ -18,6 +21,37 @@ constexpr Point3D POINT_LIGHT_POS{10, 10, 10};
 constexpr Point3D CAMERA_CENTER{0, 0, 3};
 constexpr double VERTICAL_FOV_RADIANS = std::numbers::pi / 3;
 constexpr Vec3D BACKGROUND_COLOR{0.2, 0.7, 0.8};
+
+/* This function introduces a displacement map on the surface of our sphere. Given a
+point `p`, it returns the DISPLACED radius of the sphere towards that point. Just as
+a point `p` lies inside a regular sphere iff the distance from the sphere's center
+to `p` is at most the radius of that sphere, a point `p` lies inside the DISPLACED
+sphere iff the distance from the sphere's center to `p` is at most the DISPLACED
+radius of the sphere towards that point `p`. */
+auto calculate_displaced_radius_towards(const Point3D &p) {
+
+    /* The displacement map maps points on the surface of the sphere to their displacements
+    off the surface of the sphere (we will see what exactly this means at the `return`
+    statement below). To calculate the displaced radius towards the point `p`, we thus need
+    to first project `p` onto the surface of the sphere. */
+    auto projected_onto_sphere = p.unit_vector() * SPHERE_RADIUS;
+    /* Given a point (x, y, z) on the surface of the sphere, our displacement map is defined by
+    mapping that point to (sin(16x)*sin(16y)*sin(16z) * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE).
+    This results in a hedgehog-like surface with lots of peaks and ridges. */
+    auto displacement = (std::sin(16 * projected_onto_sphere.x)
+                       * std::sin(16 * projected_onto_sphere.y)
+                       * std::sin(16 * projected_onto_sphere.z))
+                       * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE;
+    
+    /* Again, the displacement map maps points on the surface of the sphere to their displacements
+    normal to the original surface of the sphere. So, if S is a point on the surface of the
+    original sphere (meaning it is `SPHERE_RADIUS` away from the center of the sphere), and the
+    displacement map maps S to some displacement `d`, then after displacement mapping, S will be
+    its original distance `SPHERE_RADIUS` PLUS the displacement `d` away from the center of the
+    sphere. Thus, we return `SPHERE_RADIUS` + `displacement` for the displaced radius of the
+    displacement-mapped sphere towards the point `p`. */
+    return SPHERE_RADIUS + displacement;
+}
 
 /* Returns the signed distance from the point `p` to the surface of the sphere.
 By "signed distance", we mean the value whose magnitude equals the shortest distance
@@ -40,8 +74,12 @@ auto signed_distance_from_sphere(const Point3D &p) {
 
     Finally, because our sphere is centered at the origin, dist(C, p) is just equal to the
     magnitude of p. Thus, the signed distance from `p` to the sphere is given by
-    p.mag() - SPHERE_RADIUS, which is what we will return. */
-    return p.mag() - SPHERE_RADIUS;
+    p.mag() - SPHERE_RADIUS, which is what we will return.
+    
+    After adding displacement mapping, the only modification needed to return the signed distance
+    to the displacement-mapped sphere is simply to use the displaced radius towards `p` in place
+    of the original radius `SPHERE_RADIUS`.*/
+    return p.mag() - calculate_displaced_radius_towards(p);
 }
 
 /* Returns the closest hit point of the ray with origin `ray_origin` and direction `ray_dir`
@@ -78,6 +116,46 @@ std::optional<Point3D> closest_sphere_hit_point(const Point3D &ray_origin, const
 
     /* If the ray never hits the sphere, we return an empty `std::optional` object. */
     return {};
+}
+
+/* Approximates the unit surface normal at `hit_point` on the displacement-mapped sphere
+by using the method of finite differences. */
+auto get_unit_surface_normal(const Point3D &hit_point) {
+    /* The key idea here is that finding the (outward) surface normal at a point `hit_point`
+    is equivalent to finding the gradient of the signed distance function at that same point.
+    This is because the gradient points in the direction of steepest increase for a function,
+    which, for the signed distance function (and for distance functions in general), is
+    outward and perpendicular to the surface. Thus, it suffices to find the gradient of
+    the signed distance function at `hit_point`, and then normalize it. And to do this, we
+    need to find the partial derivatives of the signed distance function with respect to the
+    x-, y-, and z- coordinates, at the point `hit_point`.
+ 
+    We approximate the partial derivatives of the signed distance with respect to the x-, y-
+    and z-coordinates at the point `hit_point` by using the method of finite differences. The
+    most basic form of the method of finite differences, which we use here, is very simple:
+    it just states that to approximate f'(x), you evaluate (f(x + h) - f(x)) / h for some
+    very small positive real number h. This works because the definition of the derivative
+    f'(x) is just the limit, as h approaches 0, of (f(x + h) - f(x)) / h.
+    
+    Using this idea, we approximate the partial derivative of the signed distance with respect
+    to some axis (say the x-axis) at the point `hit_point` by evaluating the expression
+    signed_distance(hit_point shifted by some epsilon along the x-axis) - signed_distance(hit_point)
+    While we technically need to divide this quantity by `epsilon` in order for it to approximate
+    the partial derivative, we don't need that here. This is because again, we just need to return
+    the normalized gradient; all that matters is that the ratio between the partial derivatives
+    is preserved, and so we can just leave out dividing by epsilon for all three of the partial
+    derivatives, because not dividing does not change the ratio between the partial derivatives. */
+
+    constexpr double epsilon = 0.1;
+    auto initial_dist = signed_distance_from_sphere(hit_point);
+    auto partial_x = signed_distance_from_sphere(hit_point + Vec3D{epsilon, 0, 0}) - initial_dist;
+    auto partial_y = signed_distance_from_sphere(hit_point + Vec3D{0, epsilon, 0}) - initial_dist;
+    auto partial_z = signed_distance_from_sphere(hit_point + Vec3D{0, 0, epsilon}) - initial_dist;
+
+    /* Return the normalized gradient at `hit_point`, which is just the unit vector of
+    {partial_x, partial_y, partial_z}. This is our unit approximated surface normal at the point
+    `hit_point`. */
+    return Vec3D{partial_x, partial_y, partial_z}.unit_vector();
 }
 
 int main()
@@ -156,7 +234,13 @@ int main()
                 which is what we want to compute. As a result, here, cos(theta) is equal to the
                 dot product of the UNIT surface normal at the hit point, and the UNIT direction
                 from the hit point towards the light. */
-                auto unit_surface_normal = (*hit_point - Point3D{0, 0, 0}).unit_vector();
+
+                /* Because our object is no longer a sphere (due to our displacement mapping),
+                the unit surface normal at `hit_point` can no longer be easily directly
+                computed. As a result, we introduce `get_unit_surface_normal`, which numerically
+                approximates the unit surface normal at `hit_point` (see the comments for it
+                above). For our purposes, this is good enough. */
+                auto unit_surface_normal = get_unit_surface_normal(*hit_point);
                 auto unit_dir_to_light = (POINT_LIGHT_POS - *hit_point).unit_vector();
                 auto brightness_factor = std::clamp(
                     /* Calculate the cosine of the angle between the surface normal at the hit
@@ -167,18 +251,13 @@ int main()
                     0.4, 1.
                 );
 
-                /* Now use a spatial texture to color the surface of the sphere. Specifically,
-                 we will set the color of the sphere at the hit point (x, y, z) to be the RGB
-                color with all channels set to (sin(16x)sin(16y)sin(16z) + 1) / 2.  */
-                auto color_from_spatial_texture = Vec3D{1, 1, 1} * (
-                    std::sin(16 * hit_point->x)
-                  * std::sin(16 * hit_point->y)
-                  * std::sin(16 * hit_point->z) + 1
-                ) / 2.;
+                /* After applying the displacement mapping, we don't need our spatial texture
+                anymore. We just let Lambertian reflectance from the point light handle the
+                colors. */
 
                 /* Scale the color at this point (which is `color_from_spatial_texture`) by the
                 brightness factor (which was determined by Lambertian reflectance). */
-                image[row][col] = color_from_spatial_texture * brightness_factor;
+                image[row][col] = Vec3D{1, 1, 1} * brightness_factor;
             } else {
                 /* This camera ray did not hit the sphere, so this pixel's color will be equal
                 to the background color */
@@ -187,7 +266,7 @@ int main()
         }
     }
 
-    /* Output the image as a PPM file called "image.ppm" */
+    /* Output the image as a PPM file called "rendered_image.ppm" */
     std::ofstream fout("rendered_image.ppm");
     fout << "P3\n" << IMAGE_COLS << " " << IMAGE_ROWS << "\n255\n";
     for (size_t row = 0; row < IMAGE_ROWS; ++row) {
