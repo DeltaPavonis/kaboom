@@ -30,25 +30,31 @@ sphere iff the distance from the sphere's center to `p` is at most the DISPLACED
 radius of the sphere towards that point `p`. */
 auto calculate_displaced_radius_towards(const Point3D &p) {
 
-    /* The displacement map maps points on the surface of the sphere to their displacements
-    off the surface of the sphere (we will see what exactly this means at the `return`
-    statement below). To calculate the displaced radius towards the point `p`, we thus need
-    to first project `p` onto the surface of the sphere. */
-    auto projected_onto_sphere = p.unit_vector() * SPHERE_RADIUS;
-    /* Given a point (x, y, z) on the surface of the sphere, our displacement map is defined by
+    /* Previously, we first projected `p` to a point on the surface of the sphere, and only
+    then did we apply our displacement map to that point on the surface of the sphere. By
+    restricting the domain of the displacement map to points on the surface of the sphere,
+    we ensured that the displacement map could only affect the surface of the sphere. And
+    because the displacement map was continuous, that meant the displaced surface of the
+    sphere was guaranteed to be continuous as well. In general, first projecting `p` to the
+    surface of the sphere is suitable for creating bumps/indentations and other modifications
+    to the sphere's surface that are still attached to the original sphere itself.
+    
+    However, this is not desirable for an explosion, which may have multiple small "clouds"
+    that are detached from the original explosion cloud. As a result, we will now no longer
+    project `p` onto the surface of the sphere before applying the displacement map to it.
+    Instead, we will apply the displacement map to `p` directly. This allows the map to
+    generate disconnected components and structures from the original sphere, which
+    is what we want. */
+
+    /* Given an arbitrary point (x, y, z) that NEED NOT BE ON THE SURFACE OF THE SPHERE now,
+    our displacement map is defined by
     mapping that point to (sin(16x)*sin(16y)*sin(16z) * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE).
-    This results in a hedgehog-like surface with lots of peaks and ridges. */
-    auto displacement = (std::sin(16 * projected_onto_sphere.x)
-                       * std::sin(16 * projected_onto_sphere.y)
-                       * std::sin(16 * projected_onto_sphere.z))
+    This results in a bumpy surface with some separate "bubbles" floating above it. */
+    auto displacement = (std::sin(16 * p.x) * std::sin(16 * p.y) * std::sin(16 * p.z))
                        * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE;
     
-    /* Again, the displacement map maps points on the surface of the sphere to their displacements
-    normal to the original surface of the sphere. So, if S is a point on the surface of the
-    original sphere (meaning it is `SPHERE_RADIUS` away from the center of the sphere), and the
-    displacement map maps S to some displacement `d`, then after displacement mapping, S will be
-    its original distance `SPHERE_RADIUS` PLUS the displacement `d` away from the center of the
-    sphere. Thus, we return `SPHERE_RADIUS` + `displacement` for the displaced radius of the
+    /* Now, the displacement map maps arbitrary points in space to their displacements.
+    As before, we return `SPHERE_RADIUS` + `displacement` for the displaced radius of the
     displacement-mapped sphere towards the point `p`. */
     return SPHERE_RADIUS + displacement;
 }
