@@ -1,33 +1,35 @@
 #include <fstream>
 #include <cstddef>
 #include <vector>
-#include <numbers>
-#include <optional>
-#include "vec3d.h"
+#include <mutex>
+#include "fractal_brownian_motion.h"
 
 /* Dimensions of the rendered image */
-constexpr size_t IMAGE_ROWS = 750, IMAGE_COLS = 1000;
+constexpr size_t IMAGE_ROWS = 1080, IMAGE_COLS = 1080;
 
-/* Radius of the single sphere, which is centered at the origin */
-constexpr double SPHERE_RADIUS = 1.5;
-/* The amplitude of the peaks on the surface of the sphere after performing displacement
-mapping */
-constexpr double SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE = 0.2;
+/* The center and radius of the implicit sphere. */
+constexpr Point3D SPHERE_CENTER{0, 0, 0};
+double SPHERE_RADIUS = 1.5;
+/* Our noise values will fall in the range [0, `NOISE_AMPLITUDE`].
+(The noise function always generates values in [0, 1], which we scale to [0, `NOISE_AMPLITUDE`]
+by multiplying the returned noise values by `NOISE_AMPLITUDE`; see
+`calculate_displaced_radius_towards`). */
+constexpr double NOISE_AMPLITUDE = 1.;
 
 /* Position of the single point light */
 constexpr Point3D POINT_LIGHT_POS{10, 10, 10};
 
 /* Properties of the camera */
 constexpr Point3D CAMERA_CENTER{0, 0, 3};
-constexpr double VERTICAL_FOV_RADIANS = std::numbers::pi / 3;
+constexpr double VERTICAL_FOV_RADIANS = std::numbers::pi / 3;  /* 60 degrees */
 constexpr Vec3D BACKGROUND_COLOR{0.2, 0.7, 0.8};
 
-/* This function introduces a displacement map on the surface of our sphere. Given a
-point `p`, it returns the DISPLACED radius of the sphere towards that point. Just as
-a point `p` lies inside a regular sphere iff the distance from the sphere's center
-to `p` is at most the radius of that sphere, a point `p` lies inside the DISPLACED
-sphere iff the distance from the sphere's center to `p` is at most the DISPLACED
-radius of the sphere towards that point `p`. */
+/* This function introduces a displacement map on our sphere. Given any point `p`,
+it returns the DISPLACED radius of the sphere at that point. Just as a point
+`p` lies inside a regular sphere iff the distance from the sphere's center to `p`
+is at most the radius of that sphere, a point `p` lies inside the DISPLACED sphere
+iff the distance from the sphere's center to `p` is at most the DISPLACED radius
+of the sphere towards that point `p`. */
 auto calculate_displaced_radius_towards(const Point3D &p) {
 
     /* Previously, we first projected `p` to a point on the surface of the sphere, and only
@@ -46,13 +48,30 @@ auto calculate_displaced_radius_towards(const Point3D &p) {
     generate disconnected components and structures from the original sphere, which
     is what we want. */
 
-    /* Given an arbitrary point (x, y, z) that NEED NOT BE ON THE SURFACE OF THE SPHERE now,
-    our displacement map is defined by
-    mapping that point to (sin(16x)*sin(16y)*sin(16z) * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE).
-    This results in a bumpy surface with some separate "bubbles" floating above it. */
-    auto displacement = (std::sin(16 * p.x) * std::sin(16 * p.y) * std::sin(16 * p.z))
-                       * SPHERE_RADIUS_DISPLACEMENT_MAP_AMPLITUDE;
+    /* Now, our displacement map is defined in terms of Fractal Brownian Motion; that is,
+    in terms of Fractal Noise. Specifically, at a point `p`, we will displace INWARD from
+    the surface by `fractal_brownian_motion(p * 3.4) * NOISE_AMPLITUDE`. By the properties
+    of Fractal Brownian Motion, this will result in a natural-looking cloud shape, which
+    is exactly what we want.
     
+    Note that the displacement depends on `fractal_brownian_motion(p * 3.4)`, rather than
+    just `fractal_brownian_motion(p)`. This is what ssloy does, and I believe it is because
+    Fractal Brownian Motion (and noise in general) generates similar values at points very
+    close together. So, by multiplying `p` by 3.4, we increase the difference between the
+    inputs to `fractal_brownian_motion` for points close together, resulting in less "flat"
+    and more complex surfaces. Try adjusting the constant 3.4 to see for yourself; if it
+    is too low, the explosion becomes just one big blob, and if it is too large, the
+    explosion cloud becomes a disorganized mess (because we still WANT to have the
+    property where points close together have similar displacements. If you multiply
+    `p` by a constant that is too large, then even for points that are close together,
+    we will be giving widely varying inputs to `fractal_brownian_motion`, resulting in a
+    cloud with no inherent "connection"; the explosion will look like a collection of very
+    tiny clouds, each one representing a group of points very near to each other; so near
+    that even with the large multiplier, they were generated in the same connected component
+    by the Fractal Brownian Motion). */
+    auto val = fractal_brownian_motion(p * 3.4);  /* See above comment about the 3.4 */
+    auto displacement = -val * NOISE_AMPLITUDE;  /* Displacement is in [-NOISE_AMPLITUDE, 0] */
+
     /* Now, the displacement map maps arbitrary points in space to their displacements.
     As before, we return `SPHERE_RADIUS` + `displacement` for the displaced radius of the
     displacement-mapped sphere towards the point `p`. */
@@ -85,13 +104,34 @@ auto signed_distance_from_sphere(const Point3D &p) {
     After adding displacement mapping, the only modification needed to return the signed distance
     to the displacement-mapped sphere is simply to use the displaced radius towards `p` in place
     of the original radius `SPHERE_RADIUS`.*/
-    return p.mag() - calculate_displaced_radius_towards(p);
+    return (p - SPHERE_CENTER).mag() - calculate_displaced_radius_towards(p);
 }
 
 /* Returns the closest hit point of the ray with origin `ray_origin` and direction `ray_dir`
 with the sphere we are rendering, which is centered at the origin, and has radius given by
 `SPHERE_RADIUS`. */
 std::optional<Point3D> closest_sphere_hit_point(const Point3D &ray_origin, const Vec3D &ray_dir) {
+
+    /* Because our displacement map never increases the radius of the sphere towards any point
+    (as the `displacement` variable in `calculate_displaced_radius_towards` is always negative),
+    we know that a ray intersects with our explosion only if it intersects with the original
+    non-displacement-mapped sphere, which is the sphere centered at SPHERE_CENTER and with
+    radius SPHERE_RADIUS. Thus, for optimization purposes, we will first do some basic 3D
+    geometry and math to check if the ray intersects with the original sphere; if it does not,
+    then we immediately know that it will not intersect the explosion, and so we will return
+    an empty `std::optional<Point3D>` as a result. */
+    {
+        /* Set up quadratic formula calculation */
+        auto center_to_origin = ray_origin - SPHERE_CENTER;
+        auto a = dot(ray_dir, ray_dir);
+        auto b_half = dot(ray_dir, center_to_origin);
+        auto c = dot(center_to_origin, center_to_origin) - SPHERE_RADIUS * SPHERE_RADIUS;
+        auto discriminant_quarter = b_half * b_half - a * c;
+
+        /* Quadratic has no solutions whenever the discriminant is negative; this means
+        the given ray does not intersect the sphere */
+        if (discriminant_quarter < 0) {return {};}
+    }
 
     /* `ray_unit_dir` = An UNIT VECTOR parallel to the given ray's direction. */
     auto ray_unit_dir = ray_dir.unit_vector();
@@ -105,7 +145,7 @@ std::optional<Point3D> closest_sphere_hit_point(const Point3D &ray_origin, const
     Here, we test distances starting from 0 (obviously) in increments of 0.01. In our scene,
     every closest hit point has distance less than 5 from the camera center, so we only need
     to test distances less than 5. */
-    for (double distance_along_ray = 0; distance_along_ray < 5; distance_along_ray += 0.01) {
+    for (auto distance_along_ray = 0.; distance_along_ray < 5; distance_along_ray += 0.05) {
 
         /* Check if the point at a distance of `distance_along_ray` along the given ray is
         on or inside the sphere. If it does hit the sphere, then it is the closest hit point
@@ -166,7 +206,20 @@ auto get_unit_surface_normal(const Point3D &hit_point) {
 
 int main()
 {
-    /* Render image of dimensions IMAGE_ROWS x IMAGE_COLS */
+    /* The seed used for the images that come with this repository. Delete or modify this
+    line if you want to set your own seed, or if you just want the program to use a
+    random seed (the program automatically generates a random seed if no seed is explicitly
+    provided by the user; see the next line of code). */
+    seed = 0x1.167d98ef1184p+19;
+
+    /* Generate a random seed if a seed was not provided by the user */
+    generate_seed_if_not_set();
+
+    /* Print the seed in hexadecimal floating-point format to ensure exactness */
+    std::cout << std::showbase << std::hexfloat << "Seed: " << *seed << std::endl;
+    std::cout << std::noshowbase << std::defaultfloat;  /* Undo `std::showbase`/`std::hexfloat` */
+ 
+    /* Render image of dimensions IMAGE_COLS x IMAGE_ROWS */
     std::vector image(IMAGE_ROWS, std::vector<Vec3D>(IMAGE_COLS));
 
     /* Now, let's set up the viewport. For maximum simplicity, we will just set the viewport
@@ -175,7 +228,8 @@ int main()
     /* Every other viewport property - the focal length (shortest distance from the camera
     center to the viewport, the top-left corner of the viewport, the delta for moving one
     row or one column, and the location of the top-left pixel - are all determined by
-    the viewport height, viewport width, and camera center. */
+    the viewport height, viewport width, camera center, and camera field-of-view (vertical FOV
+    here; you can also use horizontal FOV). */
     /* `FOCAL_LENGTH` is calculated by the usual formula, as is `VIEWPORT_TOP_LEFT_CORNER`. */
     const auto FOCAL_LENGTH = VIEWPORT_HEIGHT / (2. * std::tan(VERTICAL_FOV_RADIANS / 2.));
     const auto VIEWPORT_TOP_LEFT_CORNER = CAMERA_CENTER +
@@ -191,8 +245,13 @@ int main()
     /* The center of the top-left pixel's square is calculated by the usual formula */
     const auto PIXEL00_LOC = VIEWPORT_TOP_LEFT_CORNER + PIXEL_ROW_DELTA / 2 + PIXEL_COL_DELTA / 2;
 
-    /* Render loop */
-    #pragma omp parallel for schedule(dynamic)
+    /* Variables needed to continuously update and print out the number of rows left in the
+    render loop below */
+    auto rows_left = IMAGE_ROWS;
+    std::mutex update_rows_left_mtx;
+    
+    /* Render Loop */
+    #pragma omp parallel for schedule(dynamic, 8)  /* Parallelize across rows */
     for (size_t row = 0; row < IMAGE_ROWS; ++row) {
         for (size_t col = 0; col < IMAGE_COLS; ++col) {
 
@@ -253,7 +312,7 @@ int main()
                     point, and the direction from the hit point to the light */
                     dot(unit_surface_normal, unit_dir_to_light),
                     /* Then clamp that value, because it may be negative or exceed 1. The
-                    tutorial chooses the set a lower bound of 0.4, so I will do that as well. */
+                    tutorial chooses to set a lower bound of 0.4, so I will do that as well. */
                     0.4, 1.
                 );
 
@@ -261,8 +320,9 @@ int main()
                 anymore. We just let Lambertian reflectance from the point light handle the
                 colors. */
 
-                /* Scale the color at this point (which is `color_from_spatial_texture`) by the
-                brightness factor (which was determined by Lambertian reflectance). */
+                /* We say that the intrinsic color of every point on our sphere is just pure white
+                (Vec3D{1, 1, 1}). This color is scaled by the `brightness_factor`, which is
+                determined by our point light and by Lambertian reflectance above. */
                 image[row][col] = Vec3D{1, 1, 1} * brightness_factor;
             } else {
                 /* This camera ray did not hit the sphere, so this pixel's color will be equal
@@ -270,10 +330,21 @@ int main()
                 image[row][col] = BACKGROUND_COLOR;
             }
         }
+
+        /* Update and then print the number of rows left to render */
+        std::lock_guard guard(update_rows_left_mtx);
+        std::cout << "\r" << --rows_left << " rows left" << ' ' << std::flush;
+        /* ^^ Note that there is a space at the end of the line; this is intentional and necessary.
+        When the length of `rows_left` decreases by 1, then the space at the end of the line serves
+        to clear the last character of the line, so that it doesn't show up later (that is, if
+        we did not print a space at the end of the line, then if we started with "1000 rows left"
+        the next iteration would print "999 rows leftt" because the previous last character "t"
+        would still remain on the line). */
     }
 
-    /* Output the image as a PPM file called "rendered_image.ppm" */
-    std::ofstream fout("rendered_image.ppm");
+    /* Output the image as a PPM file to the location specified by `output_file_path` */
+    std::string output_file_path = "rendered_image.ppm";
+    std::ofstream fout(output_file_path);
     fout << "P3\n" << IMAGE_COLS << " " << IMAGE_ROWS << "\n255\n";
     for (size_t row = 0; row < IMAGE_ROWS; ++row) {
         for (size_t col = 0; col < IMAGE_COLS; ++col) {
@@ -285,5 +356,7 @@ int main()
         }
     }
 
+    std::cout << "\rSuccessfully outputted image to " << output_file_path << std::endl;
+    
     return 0;
 }

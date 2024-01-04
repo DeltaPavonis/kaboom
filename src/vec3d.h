@@ -71,8 +71,14 @@ std::ostream& operator<< (std::ostream& os, const Vec3D &v) {
 
 /* Returns the unit vector of this `Vec3D`. */
 Vec3D Vec3D::unit_vector() const {
-    /* Unit vector is found by dividing the vector by its length/magnitude */
+    /* The unit vector is found by dividing the vector by its length/magnitude */
     return *this / this->mag();
+}
+
+/* Computes the linear interpolation between two `Vec3D`s `a` and `b`, with interpolation
+parameter equal to `t`. */
+auto vec3d_lerp(const Vec3D &a, const Vec3D &b, double t) {
+    return a + t * (b - a);
 }
 
 /* `Point3D` is a type alias for `Vec3D`, declared to improve clarity in the code */
