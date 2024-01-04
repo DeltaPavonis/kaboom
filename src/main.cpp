@@ -204,6 +204,40 @@ auto get_unit_surface_normal(const Point3D &hit_point) {
     return Vec3D{partial_x, partial_y, partial_z}.unit_vector();
 }
 
+/* Returns the color of the explosion corresponding to a given noise level. */
+Vec3D get_explosion_color_at(const Point3D &hit_point) {
+    constexpr static Vec3D    yellow{1.7, 1.3, 1.0};  /* Note that this has components > 1 */
+    constexpr static Vec3D    orange{1.0, 0.6, 0.0};
+    constexpr static Vec3D       red{1.0, 0.0, 0.0};
+    constexpr static Vec3D dark_gray{0.2, 0.2, 0.2};
+    constexpr static Vec3D      gray{0.4, 0.4, 0.4};
+    /* ^^ These are the same colors from ssloy's tutorial */
+
+    /* The color at `hit_point` is determined by its "displacement ratio": the ratio of the inward
+    displacement of `hit_point` from the sphere's surface (that is, the distance from the sphere's
+    surface to `hit_point`; this is just the distance from the center of the sphere to `hit_point`
+    subtracted from the sphere's radius), and the maximum possible inward displacement of any point
+    (which is `NOISE_AMPLITUDE`, because the inward displacement is equal to `NOISE_AMPLITUDE
+    * fractal_brownian_motion(something)`, and `fractal_brownian_motion`'s return value is in the
+    range [0, 1]). The displacement ratio is stored in the variable `displacement_ratio`. */
+    auto displacement_ratio = (SPHERE_RADIUS - (hit_point - SPHERE_CENTER).mag()) / NOISE_AMPLITUDE;
+    /* Adjust `displacement_ratio` and clamp it to [0, 1]. This was done in the tutorial, and it
+    allows for more white/yellow to show up. */
+    displacement_ratio = std::clamp(2 * (displacement_ratio - 0.2), 0., 1.);
+
+    /* Create a steady linear ramp between the five colors (from dark to light), based on the
+    `displacement_ratio` of `hitpoint`. A lower displacement ratio results in a darker color. */
+    if (displacement_ratio < 0.25) {
+        return vec3d_lerp(gray, dark_gray, displacement_ratio * 4);
+    } else if (displacement_ratio < 0.5) {
+        return vec3d_lerp(dark_gray, red, displacement_ratio * 4 - 1);
+    } else if (displacement_ratio < 0.75) {
+        return vec3d_lerp(red, orange, displacement_ratio * 4 - 2);
+    } else {
+        return vec3d_lerp(orange, yellow, displacement_ratio * 4 - 3);
+    }
+}
+
 int main()
 {
     /* The seed used for the images that come with this repository. Delete or modify this
@@ -320,10 +354,11 @@ int main()
                 anymore. We just let Lambertian reflectance from the point light handle the
                 colors. */
 
-                /* We say that the intrinsic color of every point on our sphere is just pure white
-                (Vec3D{1, 1, 1}). This color is scaled by the `brightness_factor`, which is
-                determined by our point light and by Lambertian reflectance above. */
-                image[row][col] = Vec3D{1, 1, 1} * brightness_factor;
+                /* The intrinsic color of a point on our explosion cloud is given by
+                `get_explosion_color_at`. This intrinsic color is then scaled by the
+                `brightness_factor`, which is determined by our point light and by the
+                Lambertian reflectance above. */
+                image[row][col] = get_explosion_color_at(*hit_point) * brightness_factor;
             } else {
                 /* This camera ray did not hit the sphere, so this pixel's color will be equal
                 to the background color */
